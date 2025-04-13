@@ -31,9 +31,13 @@ if uploaded_file:
     st.write("### Summary Statistics")
     st.write(df.describe())
 
-    label_encoder = LabelEncoder()
-    for col in df.select_dtypes(include='object').columns:
-        df[col + "_enc"] = label_encoder.fit_transform(df[col])
+    original_categorical_cols = df.select_dtypes(include='object').columns.tolist()
+    label_encoders = {}
+
+    for col in original_categorical_cols:
+        le = LabelEncoder()
+        df[col + "_enc"] = le.fit_transform(df[col])
+        label_encoders[col] = le
 
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     selected_features = st.multiselect("🔧 Select features for clustering:", numeric_cols, default=numeric_cols[:2])
@@ -125,20 +129,61 @@ if uploaded_file:
         st.subheader("📊 Clustered Data Preview")
         st.dataframe(df.head())
 
-        # --- Predict cluster for new user ---
+        # Download button
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Clustered Data as CSV",
+            data=csv,
+            file_name='clustered_data.csv',
+            mime='text/csv'
+        )
+
+        # Predict cluster for a new user
         st.subheader("🔍 Predict Cluster for a New User")
+
+        new_user_inputs = {}
         with st.form("new_user_form"):
-            new_user_inputs = {}
-            for feature in selected_features:
-                new_user_inputs[feature] = st.number_input(f"{feature}", value=float(df[feature].mean()))
+            st.markdown("#### Enter values for the new user")
+
+            # Categorical features
+            for col in original_categorical_cols:
+                unique_vals = df[col].unique().tolist()
+                new_user_inputs[col] = st.selectbox(f"{col}", unique_vals)
+
+            # Numeric-only selected features
+            for col in selected_features:
+                if col not in df.columns or col.endswith("_enc"):
+                    continue
+                new_user_inputs[col] = st.number_input(f"{col}", value=float(df[col].mean()))
+
             submitted = st.form_submit_button("Predict Cluster")
 
             if submitted:
                 new_user_df = pd.DataFrame([new_user_inputs])
-                scaled_new_user = scaler.transform(new_user_df[selected_features])
-                new_user_pca = pca.transform(scaled_new_user) if use_pca else scaled_new_user
-                new_user_cluster = kmeans.predict(new_user_pca)[0]
-                st.success(f"✅ The new user belongs to KMeans Cluster: {new_user_cluster}")
+
+                # Encode categorical features
+                for col in original_categorical_cols:
+                    le = label_encoders[col]
+                    new_user_df[col + "_enc"] = le.transform(new_user_df[col])
+
+                # Build feature vector for clustering
+                input_features = []
+                for col in selected_features:
+                    if col in new_user_df.columns:
+                        input_features.append(new_user_df[col])
+                    elif col.endswith("_enc") and col in new_user_df.columns:
+                        input_features.append(new_user_df[col])
+                    elif col in df.columns:
+                        input_features.append(new_user_df[col])
+
+                input_data = pd.concat(input_features, axis=1)
+                input_data.columns = selected_features
+
+                scaled_input = scaler.transform(input_data)
+                input_pca = pca.transform(scaled_input) if use_pca else scaled_input
+                predicted_cluster = kmeans.predict(input_pca)[0]
+
+                st.success(f"✅ The new user belongs to KMeans Cluster: {predicted_cluster}")
 
     else:
         st.warning("Please select at least two numeric features for clustering.")
